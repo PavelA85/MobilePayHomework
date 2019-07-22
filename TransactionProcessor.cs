@@ -70,7 +70,7 @@ namespace MobilePayHomework
             in decimal invoiceFixedFee = InvoiceFixedFee)
         {
             return new TransactionProcessor(
-                new TransactionFeeProcessor(transactionPercentageFee)
+                new TransactionFeePipeline(transactionPercentageFee)
                 , new CircleKPipeline(circleKDiscount)
                 , new TeliaPipeline(teliaDiscount)
                 , new InvoiceFeePipeline(invoiceFixedFee));
@@ -78,10 +78,7 @@ namespace MobilePayHomework
 
         public IEnumerable<Fee> ProcessLines(string lines)
         {
-            return lines
-                .Split("\r\n", StringSplitOptions.RemoveEmptyEntries)
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Select(TransactionParser.Do)
+            return TransactionParser.Lines(lines)
                 .Select(Process);
         }
 
@@ -98,11 +95,11 @@ namespace MobilePayHomework
         Fee Calculate(in Transaction transaction, in Fee fee);
     }
 
-    public class TransactionFeeProcessor : IPipeline
+    public class TransactionFeePipeline : IPipeline
     {
         private readonly decimal _transactionPercentageFee;
 
-        public TransactionFeeProcessor(in decimal transactionPercentageFee)
+        public TransactionFeePipeline(in decimal transactionPercentageFee)
         {
             _transactionPercentageFee = transactionPercentageFee;
         }
@@ -160,7 +157,7 @@ namespace MobilePayHomework
 
     public class InvoiceFeePipeline : IPipeline
     {
-        private readonly List<Transaction> _memeroy = new List<Transaction>();
+        private readonly List<Transaction> _history = new List<Transaction>();
         private readonly decimal _invoiceFixedFee;
 
         public InvoiceFeePipeline(in decimal invoiceFixedFee)
@@ -168,46 +165,49 @@ namespace MobilePayHomework
             _invoiceFixedFee = invoiceFixedFee;
         }
 
-        public Fee Calculate(in Transaction t, in Fee fee)
+        public Fee Calculate(in Transaction transaction, in Fee fee)
         {
-            var transaction = t;
-
-            bool ThisMonth(Transaction x) =>
-                x.Merchant == transaction.Merchant
-                && x.Date.Year == transaction.Date.Year
-                && x.Date.Month == transaction.Date.Month;
-
-            if (_memeroy.Any(ThisMonth))
+            if (fee.Amount == 0)
             {
                 return fee;
             }
-            
-            _memeroy.Add(t);
 
-            if (fee.Amount > 0)
+            if (_history.Any(IsThisMonth(transaction)))
             {
-                fee.Amount += _invoiceFixedFee;
+                return fee;
             }
 
+            _history.Add(transaction);
+            fee.Amount += _invoiceFixedFee;
+
             return fee;
+        }
+
+        private static Func<Transaction, bool> IsThisMonth(Transaction transaction)
+        {
+            return history => history.Merchant == transaction.Merchant
+                             && history.Date.Year == transaction.Date.Year
+                             && history.Date.Month == transaction.Date.Month;
         }
     }
 
     public static class TransactionParser
     {
-        public static Transaction Do(string line)
+        public static Transaction Line(string line)
         {
             var items = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (!items.Any())
-            {
-                return null;
-            }
-
             var date = DateTime.Parse(items[0]);
             var merchant = items[1];
             var amount = decimal.Parse(items[2]);
-            var transaction = new Transaction(date, merchant, amount);
-            return transaction;
+            return new Transaction(date, merchant, amount);
+        }
+
+        public static IEnumerable<Transaction> Lines(string lines)
+        {
+            return lines
+                .Split("\r\n", StringSplitOptions.RemoveEmptyEntries)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(Line);
         }
     }
 }
